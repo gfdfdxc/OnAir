@@ -247,10 +247,10 @@ pub fn clean(src: &[u8], out: &mut [u8]) -> usize {
     clean_in_place(out, src.len())
 }
 
-/// Does unprefixed text look like a run of valid GB 2312 (EUC-CN) pairs, as some Chinese DTMB muxes send?
+/// Does unprefixed text look like a run of valid GB 2312 (EUC-CN) pairs, as Chinese DTMB and DVB-C muxes send?
 fn looks_gb2312(p: &[u8]) -> bool {
     let n = p.len();
-    if n < 2 || p[0] < 0x81 {
+    if n < 2 || p[0] < 0x20 || p[0] == 0x80 {
         return false;
     }
     let mut pairs = 0;

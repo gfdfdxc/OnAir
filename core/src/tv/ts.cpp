@@ -59,7 +59,7 @@ void TsDemux::noteIds(int tsid, int onid) {
     prev.tsid = tsid_; prev.onid = onid_;
     cur.tsid = tsid; cur.onid = onid;
     if (isDifferentMux(prev, cur)) {   // only the service state: the section being parsed lives in sec_ and must stay
-        psip_ = psip::State(); services_.clear(); pmtToService_.clear(); epg_.clear(); epgExt_.clear(); network_.clear();
+        psip_ = psip::State(); services_.clear(); pmtToService_.clear(); epg_.clear(); epgExt_.clear(); network_.clear(); si_.resetTextCountry();
     }
     tsid_ = tsid;
     if (onid > 0) onid_ = onid;
@@ -254,14 +254,15 @@ void TsDemux::parseSdt(const uint8_t* s, int len) {
     std::vector<tsp::SdtService> v;
     if (!tsp::parseSdt(s, len, tsid, onid, v)) return;
     noteIds(tsid, onid);
+    const bool gb = gbText_ || si_.gbDefault();
     for (const tsp::SdtService& e : v) {
         TsService& sv = services_[e.sid];
         sv.id = e.sid;
         sv.haveSdt = true;
         sv.caFlag = sv.caFlag || e.freeCa;
         if (e.hasType) sv.type = e.type;
-        if (e.hasProvider) sv.provider = dvbText(s + e.provider.off, (int)e.provider.len, gbText_);
-        if (e.hasName) sv.name = dvbText(s + e.name.off, (int)e.name.len, gbText_);
+        if (e.hasProvider) sv.provider = dvbText(s + e.provider.off, (int)e.provider.len, gb);
+        if (e.hasName) sv.name = dvbText(s + e.name.off, (int)e.name.len, gb);
     }
     // linkage descriptors (0x4A) of the service loop; type 0x05 names the service that replaces this one (the HD simulcast), read here from the raw section
     const int end = len - 4;
@@ -286,7 +287,7 @@ void TsDemux::parseSdt(const uint8_t* s, int len) {
 void TsDemux::parseNit(const uint8_t* s, int len) {
     tsp::Nit nit;
     if (!tsp::parseNit(s, len, nit)) return;
-    if (nit.hasName) network_ = dvbText(s + nit.name.off, (int)nit.name.len, gbText_);
+    if (nit.hasName) network_ = dvbText(s + nit.name.off, (int)nit.name.len, gbText_ || si_.gbDefault());
     for (const tsp::NitLcn& e : nit.lcn) {   // logical channel numbers (descriptor 0x83 in private data, e.g. EACEM / UK)
         services_[e.sid].id = e.sid;
         services_[e.sid].lcn = e.lcn;
@@ -297,6 +298,7 @@ void TsDemux::parseEit(const uint8_t* s, int len) {
     tsp::Eit eit;
     if (!tsp::parseEit(s, len, eit)) return;
     const int sid = eit.sid;
+    const bool gb = gbText_ || si_.gbDefault();
     // the guide language the user prefers (#268): where the texts of that language sit, per event
     std::map<int, EpgLangPick> picks;
     { const std::string want = epgPreferredLanguage(); if (!want.empty()) epgPickLanguage(s, len, want, picks); }
@@ -304,10 +306,11 @@ void TsDemux::parseEit(const uint8_t* s, int len) {
     if (eit.legacy) {
         TsService& sv = services_[sid];
         sv.id = sid;
-        std::string nm = eit.hasName ? dvbText(s + eit.nowNextName.off, (int)eit.nowNextName.len, gbText_) : std::string();
+        const bool legacyGb = gb || (!eit.events.empty() && epgLanguageKey(eit.events[0].lang) == "zho");
+        std::string nm = eit.hasName ? dvbText(s + eit.nowNextName.off, (int)eit.nowNextName.len, legacyGb) : std::string();
         if (!eit.events.empty()) {
             auto pk = picks.find(eit.events[0].eventId);
-            if (pk != picks.end() && pk->second.hasShort) nm = dvbText(s + pk->second.titleOff, pk->second.titleLen, gbText_);
+            if (pk != picks.end() && pk->second.hasShort) nm = dvbText(s + pk->second.titleOff, pk->second.titleLen, gb || epgLanguageKey(pk->second.lang) == "zho");
         }
         (eit.secNum == 0 ? sv.now : sv.next) = nm;
     }
@@ -316,16 +319,18 @@ void TsDemux::parseEit(const uint8_t* s, int len) {
     for (const tsp::EitEvent& pe : eit.events) {
         EpgEvent ev;
         ev.eventId = pe.eventId; ev.start = pe.start; ev.duration = pe.duration; ev.running = pe.running; ev.genre = pe.genre; ev.lang = pe.lang;
-        if (pe.hasTitle) ev.title = dvbText(s + pe.title.off, (int)pe.title.len, gbText_);
-        if (pe.hasText) ev.text = dvbText(s + pe.text.off, (int)pe.text.len, gbText_);
-        for (int n = 0; n < 16; n++) if (pe.extMask & (1u << n)) ev.extended += dvbText(s + pe.ext[n].off, (int)pe.ext[n].len, gbText_);   // pieces in descriptor_number order
+        const bool eventGb = gb || epgLanguageKey(pe.lang) == "zho";
+        if (pe.hasTitle) ev.title = dvbText(s + pe.title.off, (int)pe.title.len, eventGb);
+        if (pe.hasText) ev.text = dvbText(s + pe.text.off, (int)pe.text.len, eventGb);
+        for (int n = 0; n < 16; n++) if (pe.extMask & (1u << n)) ev.extended += dvbText(s + pe.ext[n].off, (int)pe.ext[n].len, eventGb);   // pieces in descriptor_number order
         {
             auto pk = picks.find(ev.eventId);
             if (pk != picks.end()) {
                 const EpgLangPick& k = pk->second;
                 if (!k.lang.empty()) ev.lang = k.lang;
-                if (k.hasShort) { ev.title = dvbText(s + k.titleOff, k.titleLen, gbText_); ev.text = dvbText(s + k.textOff, k.textLen, gbText_); }
-                if (!k.ext.empty()) { ev.extended.clear(); for (auto& e : k.ext) ev.extended += dvbText(s + e.first, e.second, gbText_); }
+                const bool pickedGb = gb || epgLanguageKey(ev.lang) == "zho";
+                if (k.hasShort) { ev.title = dvbText(s + k.titleOff, k.titleLen, pickedGb); ev.text = dvbText(s + k.textOff, k.textLen, pickedGb); }
+                if (!k.ext.empty()) { ev.extended.clear(); for (auto& e : k.ext) ev.extended += dvbText(s + e.first, e.second, pickedGb); }
             }
         }
         auto it = evs.find(ev.eventId);

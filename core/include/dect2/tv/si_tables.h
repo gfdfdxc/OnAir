@@ -79,6 +79,8 @@ public:
     void section(int pid, const uint8_t* s, int len);
     SiSnapshot snapshot() const;
     void reset() { *this = SiCollector(); }
+    bool gbDefault() const { return gbCountry_; }
+    void resetTextCountry() { gbCountry_ = false; }
 private:
     void nit(const uint8_t* s, int len);
     void bat(const uint8_t* s, int len);
@@ -94,6 +96,7 @@ private:
     int64_t totUtc_ = 0;
     std::map<int, SiCaSystem> ca_;
     uint64_t sections_ = 0;
+    bool gbCountry_ = false;
 };
 
 } // namespace dect2

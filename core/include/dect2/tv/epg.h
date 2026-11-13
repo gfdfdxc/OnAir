@@ -47,7 +47,7 @@ struct EitSection {
 };
 // A whole section (table_id to CRC_32 inclusive). False: too short, wrong table id, length field wrong or CRC wrong. A damaged event loop
 // keeps the events decoded before the damage. Never reads past `len`.
-bool parseEitSection(const uint8_t* s, int len, EitSection& out);
+bool parseEitSection(const uint8_t* s, int len, EitSection& out, bool gbDefault = false);
 
 // ---- the language of the guide texts (#268). A broadcaster may send an event's name and text in several languages (Finland: Finnish and
 // Swedish), one short event descriptor (and extended event descriptors) per language. With a preferred language set (ISO 639-2, "fin"), the

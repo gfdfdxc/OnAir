@@ -41,6 +41,42 @@ fn charsets() {
 }
 
 #[test]
+fn gb_default_with_ascii_prefix() {
+    let convert = |name: &[u8], src: &[u8], out: &mut [u8]| {
+        assert_eq!(name, b"GB2312");
+        assert_eq!(src, b"CCTV-1 \xD7\xDB\xBA\xCF");
+        let text = "CCTV-1 综合".as_bytes();
+        out[..text.len()].copy_from_slice(text);
+        Some(text.len())
+    };
+    let mut out = [0; 128];
+    let n = charset::dvb_text(b"CCTV-1 \xD7\xDB\xBA\xCF", true, Some(&convert), &mut out);
+    assert_eq!(&out[..n], "CCTV-1 综合".as_bytes());
+    let n = charset::dvb_text("\x15CCTV-1 综合".as_bytes(), true, Some(&convert), &mut out);
+    assert_eq!(&out[..n], "CCTV-1 综合".as_bytes());
+    let n = charset::dvb_text(b"\x13CCTV-1 \xD7\xDB\xBA\xCF", true, Some(&convert), &mut out);
+    assert_eq!(&out[..n], "CCTV-1 综合".as_bytes());
+    let n = charset::dvb_text(b"CCTV-1", true, Some(&convert), &mut out);
+    assert_eq!(&out[..n], b"CCTV-1");
+    let n = charset::dvb_text(b"CCTV-1 \xD7\xDB\xBA\xCF", false, Some(&convert), &mut out);
+    assert_eq!(&out[..n], b"CCTV-1 \xc2\xa6\xe2\x80\x9d");
+}
+
+#[test]
+fn gb_default_preserves_explicit_latin_selector() {
+    let convert = |name: &[u8], src: &[u8], out: &mut [u8]| {
+        assert_eq!(name, b"ISO-8859-1");
+        assert_eq!(src, b"Caf\xe9");
+        let text = "Café".as_bytes();
+        out[..text.len()].copy_from_slice(text);
+        Some(text.len())
+    };
+    let mut out = [0; 32];
+    let n = charset::dvb_text(b"\x10\x00\x01Caf\xe9", true, Some(&convert), &mut out);
+    assert_eq!(&out[..n], "Café".as_bytes());
+}
+
+#[test]
 fn teletext_header_unit() {
     // hamming-coded address 0 (magazine 1 row 0), page 100, nothing else
     let enc = |n: u8| (0..=255u8).find(|&b| hamming84(b) == n as i32).unwrap();

@@ -100,6 +100,100 @@ int main() {
       Bytes o = eit(0x50, 1, 1, 1, 0, {event(2, mjd, 6, 0, 0, 30, 0, false, shortEv("rus", cy, u8))});
       EitSection x; CHECK(parseEitSection(o.data(), (int)o.size(), x) && x.events.size() == 1, "cs parse");
       if (!x.events.empty()) { CHECK(x.events[0].title == "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82", "8859-5 title '%s'", x.events[0].title.c_str()); CHECK(x.events[0].text == "\xC4\x85x", "utf8 text '%s'", x.events[0].text.c_str()); } }
+    // Chinese DVB-C SI without the optional character-table selector (OCN): language for EIT, country for names.
+    {
+        const Bytes name = {'C', 'C', 'T', 'V', '-', '1', ' ', 0xD7, 0xDB, 0xBA, 0xCF};
+        const Bytes chinese = {0xD6, 0xD0, 0xCE, 0xC4}; // 中文
+        Bytes shortDesc = shortEv("chi", name, chinese);
+        Bytes extended = extEv(0, 0, chinese);
+        extended[3] = 'z'; extended[4] = 'h'; extended[5] = 'o';
+        shortDesc.insert(shortDesc.end(), extended.begin(), extended.end());
+        Bytes chineseEit = eit(0x4E, 100, 7, 0x2310, 0, {event(99, mjd, 12, 0, 1, 0, 4, false, shortDesc)});
+        EitSection parsed;
+        CHECK(parseEitSection(chineseEit.data(), (int)chineseEit.size(), parsed) && parsed.events.size() == 1, "Chinese EIT parsed");
+        if (!parsed.events.empty()) {
+            CHECK(parsed.events[0].title == "CCTV-1 综合", "Chinese EIT title '%s'", parsed.events[0].title.c_str());
+            CHECK(parsed.events[0].text == "中文" && parsed.events[0].extended == "中文", "Chinese EIT descriptions");
+        }
+        epgSetPreferredLanguage("zho");
+        CHECK(parseEitSection(chineseEit.data(), (int)chineseEit.size(), parsed) && !parsed.events.empty() && parsed.events[0].title == "CCTV-1 综合"
+              && parsed.events[0].extended == "中文", "preferred Chinese EIT");
+        epgSetPreferredLanguage("");
+
+        // A Chinese event must not change another event's default charset in the same section.
+        Bytes mixedEit = eit(0x4E, 100, 7, 0x2310, 0, {
+            event(99, mjd, 12, 0, 1, 0, 4, false, shortDesc),
+            event(100, mjd, 13, 0, 1, 0, 4, false, shortEv("fra", {'C', 'a', 'f', 0xC2, 'e'}, {}))});
+        CHECK(parseEitSection(mixedEit.data(), (int)mixedEit.size(), parsed) && parsed.events.size() == 2
+              && parsed.events[0].title == "CCTV-1 综合" && parsed.events[1].title == "Café", "per-event language charset");
+        TsDemux mixed;
+        int mixedCc = 0;
+        const auto mixedPackets = packetize(mixedEit, 0x12, mixedCc);
+        for (size_t i = 0; i < mixedPackets.size(); i += 188) mixed.feed(mixedPackets.data() + i);
+        const auto mixedGuide = mixed.epg();
+        CHECK(mixedGuide.count(100) && mixedGuide.at(100).size() == 2 && mixedGuide.at(100)[0].title == "CCTV-1 综合"
+              && mixedGuide.at(100)[1].title == "Café", "demux keeps per-event language charsets");
+
+        Bytes tot = {0x73, 0x70, 0}; putTime(tot, mjd, 12, 0, 0);
+        Bytes zone = {0x58, 13, 'C', 'H', 'N', 2, 0x08, 0x00};
+        putTime(zone, mjd + 1, 0, 0, 0); zone.push_back(0x08); zone.push_back(0x00);
+        put16(tot, 0xF000 | (int)zone.size()); tot.insert(tot.end(), zone.begin(), zone.end()); finish(tot);
+        Bytes sd = {0x48, (uint8_t)(3 + chinese.size() + name.size()), 1, (uint8_t)chinese.size()};
+        sd.insert(sd.end(), chinese.begin(), chinese.end()); sd.push_back((uint8_t)name.size()); sd.insert(sd.end(), name.begin(), name.end());
+        Bytes sdt = {0x42, 0xF0, 0, 0, 7, 0xC1, 0, 0, 0x23, 0x10, 0xFF, 0, 100, 0xFC, 0x80, (uint8_t)sd.size()};
+        sdt.insert(sdt.end(), sd.begin(), sd.end()); finish(sdt);
+        EpgDb db; EpgCollector col(&db); TsDemux demux, independent;
+        int cc = 0;
+        auto feed = [&](const Bytes& section, int pid) {
+            const auto packets = packetize(section, pid, cc);
+            for (size_t i = 0; i < packets.size(); i += 188) { col.feed(packets.data() + i); demux.feed(packets.data() + i); }
+        };
+        feed(sdt, 0x11); // SDT may arrive before the country hint; its next repetition must replace the name.
+        Bytes damagedTot = tot; damagedTot.back() ^= 1;
+        feed(damagedTot, 0x14); feed(sdt, 0x11);
+        CHECK(demux.snapshot().services[0].name != "CCTV-1 综合", "bad TOT cannot change the charset");
+        feed(tot, 0x14); feed(sdt, 0x11); feed(chineseEit, 0x12);
+        Bytes nit = {0x40, 0xF0, 0, 0, 1, 0xC1, 0, 0, 0xF0, 6, 0x40, 4};
+        nit.insert(nit.end(), chinese.begin(), chinese.end()); put16(nit, 0xF000); finish(nit); feed(nit, 0x10);
+        Bytes bat = nit; bat.resize(bat.size() - 4); bat[0] = 0x4A; bat[10] = 0x47; finish(bat); feed(bat, 0x11);
+        Bytes otherSdt = sdt; otherSdt.resize(otherSdt.size() - 4); otherSdt[0] = 0x46; otherSdt[4] = 9; finish(otherSdt); feed(otherSdt, 0x11);
+        Bytes otherEit = chineseEit; otherEit.resize(otherEit.size() - 4); otherEit[0] = 0x4F; finish(otherEit); feed(otherEit, 0x12);
+        auto snap = demux.snapshot();
+        CHECK(snap.networkName == "中文" && snap.si && !snap.si->networks.empty() && snap.si->networks[0].name == "中文", "Chinese network name");
+        CHECK(snap.si && !snap.si->bouquets.empty() && snap.si->bouquets[0].name == "中文", "Chinese bouquet name");
+        CHECK(snap.si && !snap.si->otherServices.empty() && snap.si->otherServices[0].name == "CCTV-1 综合", "Chinese SDT other service name");
+        CHECK(snap.si && !snap.si->eitOther.empty() && snap.si->eitOther[0].nowTitle == "CCTV-1 综合", "Chinese EIT other title");
+        CHECK(!snap.services.empty() && snap.services[0].name == "CCTV-1 综合" && snap.services[0].provider == "中文", "Chinese DVB-C service and provider");
+        CHECK(col.serviceName({0x2310, 7, 100}) == "CCTV-1 综合", "Chinese guide service name");
+        const auto guide = demux.epg();
+        const auto it = guide.find(100);
+        CHECK(it != guide.end() && !it->second.empty() && it->second[0].title == "CCTV-1 综合" && it->second[0].extended == "中文", "Chinese demux guide");
+        CHECK(!snap.services.empty() && snap.services[0].now == "CCTV-1 综合", "Chinese now/next title");
+        epgSetPreferredLanguage("chi"); feed(chineseEit, 0x12); epgSetPreferredLanguage("");
+        const auto preferred = demux.epg();
+        CHECK(preferred.count(100) && !preferred.at(100).empty() && preferred.at(100)[0].title == "CCTV-1 综合", "preferred Chinese demux guide");
+        auto packets = packetize(sdt, 0x11, cc);
+        for (size_t i = 0; i < packets.size(); i += 188) independent.feed(packets.data() + i);
+        CHECK(independent.snapshot().services[0].name != "CCTV-1 综合", "country hint is not global");
+        packets = packetize(chineseEit, 0x12, cc);
+        for (size_t i = 0; i < packets.size(); i += 188) independent.feed(packets.data() + i);
+        CHECK(independent.snapshot().services[0].now == "CCTV-1 综合", "Chinese EIT language works without a TOT");
+        Bytes newMux = sdt; newMux.resize(newMux.size() - 4); newMux[4] = 8; finish(newMux);
+        feed(newMux, 0x11);
+        CHECK(demux.snapshot().services[0].name != "CCTV-1 综合", "a multiplex change forgets the country hint");
+        CHECK(col.serviceName({0x2310, 8, 100}) != "CCTV-1 综合", "guide forgets the previous multiplex country");
+        feed(otherSdt, 0x11); // only newly received SI is re-decoded; unrelated cached records are retained
+        bool snapshotCountryCleared = false;
+        const auto switched = demux.snapshot();
+        if (switched.si) for (const auto& service : switched.si->otherServices) {
+            if (service.onid == 0x2310 && service.tsid == 9 && service.sid == 100) snapshotCountryCleared = service.name != "CCTV-1 综合";
+        }
+        CHECK(snapshotCountryCleared, "new SDT-other reception forgets the previous multiplex country in the SI snapshot");
+        feed(tot, 0x14); feed(newMux, 0x11);
+        CHECK(demux.snapshot().services[0].name == "CCTV-1 综合", "new multiplex can learn its own country");
+        demux.reset(); feed(sdt, 0x11);
+        CHECK(demux.snapshot().services[0].name != "CCTV-1 综合", "reset forgets the country hint");
+    }
     // damage
     { Bytes bad = sec; bad[20] ^= 0x40; EitSection x; CHECK(!parseEitSection(bad.data(), (int)bad.size(), x), "bad CRC rejected"); }
     { EitSection x; CHECK(!parseEitSection(sec.data(), 10, x), "short"); CHECK(!parseEitSection(sec.data(), (int)sec.size() - 1, x), "truncated"); }
@@ -159,6 +253,32 @@ int main() {
         const EpgItem g = db.events(k)[0];
         CHECK(g.extended == es.events[0].extended && g.rating == 13 && !g.content.empty() && g.running == 4, "merge keeps text, rating, genre; takes running status");
         CHECK(!db.ingest(k, b, now) || true, "same again");
+    }
+    {   // An old EPG cache is repaired by normal same-event reception, without clearing unrelated services.
+        EpgDb cached;
+        EpgItem stale; stale.eventId = 701; stale.start = now; stale.duration = 1800; stale.lang = "chi";
+        stale.title = "µĿ©←—ł¾Ŀ"; stale.text = "old short text"; stale.extended = "old extended text";
+        stale.rating = 12; stale.content = {0x20}; stale.crid = "ocn/news";
+        const ServiceKey other{2, 9, 905};
+        EpgItem untouched = stale; untouched.eventId = 702; untouched.title = "正常中文·已缓存节目";
+        cached.ingest(k, stale, now); cached.ingest(other, untouched, now);
+        EpgDb loaded; CHECK(loaded.fromJson(cached.toJson()), "load old guide cache");
+        EpgItem fresh = stale; fresh.title = "新闻报道"; fresh.text = "最新节目简介"; fresh.extended = "最新详细内容";
+        fresh.rating = 0; fresh.content.clear(); fresh.crid.clear();
+        CHECK(loaded.ingest(k, fresh, now), "fresh broadcast replaces old cached text");
+        EpgItem repaired; CHECK(loaded.find(k, stale.eventId, repaired), "cached event remains present");
+        CHECK(repaired.title == fresh.title && repaired.text == fresh.text && repaired.extended == fresh.extended, "all fresh text fields replace old text");
+        CHECK(repaired.rating == 12 && repaired.content == stale.content && repaired.crid == stale.crid, "original partial-update metadata merge is preserved");
+        CHECK(loaded.count() == 2, "cache entries are not cleared");
+        CHECK(tvjson::dump(epgItemToValue(loaded.events(other)[0])) == tvjson::dump(epgItemToValue(untouched)), "unrelated cached programme is unchanged");
+        // The same title can also have stale descriptions; normal ingestion must still replace them.
+        repaired.text = "stale"; repaired.extended = "stale"; loaded.ingest(k, repaired, now);
+        CHECK(loaded.ingest(k, fresh, now), "refresh descriptions even when the title is unchanged");
+        EpgDb roundTrip; CHECK(roundTrip.fromJson(loaded.toJson()), "repaired guide saves and reloads");
+        CHECK(roundTrip.find(k, fresh.eventId, repaired) && repaired.title == fresh.title && repaired.extended == fresh.extended, "repaired text persists");
+        EpgItem partial = fresh; partial.text.clear(); partial.extended.clear();
+        roundTrip.ingest(k, partial, now);
+        CHECK(roundTrip.find(k, fresh.eventId, repaired) && repaired.text == fresh.text && repaired.extended == fresh.extended, "missing broadcast descriptions still retain cached text");
     }
     {   // expiry and far-future refusal
         EpgDb d2;

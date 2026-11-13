@@ -45,7 +45,7 @@ bool dvbTime(const uint8_t* p, int64_t& unixSec) {
 
 // ---- EIT ---------------------------------------------------------------------------------------------------------------------------------------
 namespace {
-void eventDescriptors(const uint8_t* d, int n, EpgItem& ev) {
+void eventDescriptors(const uint8_t* d, int n, EpgItem& ev, bool gbDefault) {
     std::map<int, std::string> ext;
     std::string extLang;
     int p = 0;
@@ -61,8 +61,9 @@ void eventDescriptors(const uint8_t* d, int n, EpgItem& ev) {
                     const int tl = b[4 + nl];
                     if (5 + nl + tl <= dl) {
                         ev.lang.assign((const char*)b, 3);
-                        ev.title = dvbsi::dvbText(b + 4, nl);
-                        ev.text = dvbsi::dvbText(b + 5 + nl, tl);
+                        const bool gb = gbDefault || epgLanguageKey(ev.lang) == "zho";
+                        ev.title = dvbsi::dvbText(b + 4, nl, gb);
+                        ev.text = dvbsi::dvbText(b + 5 + nl, tl, gb);
                     }
                 }
             }
@@ -114,7 +115,7 @@ void eventDescriptors(const uint8_t* d, int n, EpgItem& ev) {
     if (!ext.empty()) {
         std::string all;
         for (auto& kv : ext) all += kv.second;
-        ev.extended = dvbsi::dvbText((const uint8_t*)all.data(), (int)all.size());
+        ev.extended = dvbsi::dvbText((const uint8_t*)all.data(), (int)all.size(), gbDefault || epgLanguageKey(extLang) == "zho");
         if (ev.lang.empty()) ev.lang = extLang;
     }
 }
@@ -186,7 +187,7 @@ bool epgPickLanguage(const uint8_t* s, int len, const std::string& wantIn, std::
     return !out.empty();
 }
 
-bool parseEitSection(const uint8_t* s, int len, EitSection& out) {
+bool parseEitSection(const uint8_t* s, int len, EitSection& out, bool gbDefault) {
     out = EitSection();
     if (len < 18 || s[0] < 0x4E || s[0] > 0x6F) return false;
     const int total = 3 + (((s[1] & 0x0F) << 8) | s[2]);
@@ -218,7 +219,7 @@ bool parseEitSection(const uint8_t* s, int len, EitSection& out) {
             ev.start = st;
             ev.duration = dh * 3600 + dm * 60 + ds;
             ev.other = other;
-            eventDescriptors(s + p + 12, dl, ev);
+            eventDescriptors(s + p + 12, dl, ev, gbDefault);
             out.events.push_back(std::move(ev));
         }
         p += 12 + dl;
@@ -231,11 +232,12 @@ bool parseEitSection(const uint8_t* s, int len, EitSection& out) {
             if (it == picks.end()) continue;
             const EpgLangPick& pk = it->second;
             ev.lang = pk.lang;
-            if (pk.hasShort) { ev.title = dvbsi::dvbText(s + pk.titleOff, pk.titleLen); ev.text = dvbsi::dvbText(s + pk.textOff, pk.textLen); }
+            const bool gb = gbDefault || epgLanguageKey(pk.lang) == "zho";
+            if (pk.hasShort) { ev.title = dvbsi::dvbText(s + pk.titleOff, pk.titleLen, gb); ev.text = dvbsi::dvbText(s + pk.textOff, pk.textLen, gb); }
             if (!pk.ext.empty()) {
                 std::string all;
                 for (auto& e : pk.ext) all.append((const char*)s + e.first, (size_t)e.second);
-                ev.extended = dvbsi::dvbText((const uint8_t*)all.data(), (int)all.size());
+                ev.extended = dvbsi::dvbText((const uint8_t*)all.data(), (int)all.size(), gb);
             }
         }
     }
@@ -553,9 +555,10 @@ int64_t EpgCollector::nowLocked() const {
 }
 
 void EpgCollector::section(int pid, const uint8_t* s, int len) {
+    bool gb = std::any_of(zones_.begin(), zones_.end(), [](const LocalTimeOffset& z) { return z.country == "CHN"; });
     if (pid == 0x12) {
         EitSection e;
-        if (!parseEitSection(s, len, e)) { bad_++; return; }
+        if (!parseEitSection(s, len, e, gb)) { bad_++; return; }
         ok_++;
         if (db_) db_->ingestSection(e, nowLocked());
     } else if (pid == 0x14) {
@@ -569,10 +572,13 @@ void EpgCollector::section(int pid, const uint8_t* s, int len) {
         int tsid = 0, onid = 0;
         std::vector<tsp::SdtService> v;
         if (!tsp::parseSdt(s, len, tsid, onid, v)) return;
-        if (s[0] == 0x42) { onid_ = onid; tsid_ = tsid; }
+        if (s[0] == 0x42) {
+            if ((onid_ && onid_ != onid) || (tsid_ && tsid_ != tsid)) { zones_.clear(); gb = false; }
+            onid_ = onid; tsid_ = tsid;
+        }
         for (auto& sv : v) {
             if (!sv.hasName || sv.name.off + sv.name.len > (uint32_t)len) continue;
-            names_[ServiceKey{onid, tsid, sv.sid}] = dvbsi::dvbText(s + sv.name.off, (int)sv.name.len);
+            names_[ServiceKey{onid, tsid, sv.sid}] = dvbsi::dvbText(s + sv.name.off, (int)sv.name.len, gb);
         }
     }
 }
