@@ -5,6 +5,7 @@
 #include "dect2/cdr/cdr_defs.h"
 #include "dect2/cdr/cdr_mux.h"
 #include "dect2/cdr/cdr_tel.h"
+#include "dect2/common/u8file.h"
 #include <cctype>
 #include <ctime>
 #include <deque>
@@ -25,14 +26,14 @@ struct State {
 State S;
 
 std::string streamSavePathImpl(const std::string& stem) {
-    std::string name = stem.empty() ? "stream" : stem;
+    std::string name = stem.empty() ? "stream" : dect2::u8valid(stem);
     for (char& c : name) if (!(std::isalnum((unsigned char)c) || c == '-' || c == '_' || (unsigned char)c >= 0x80)) c = '_';
     const std::time_t now = std::time(nullptr);
     char ts[32];
     std::strftime(ts, sizeof ts, "%Y%m%d_%H%M%S", std::localtime(&now));
     std::error_code ec;
     const std::string dir = plat::dataDir() + "/audio-streams";
-    std::filesystem::create_directories(dir, ec);
+    std::filesystem::create_directories(dect2::u8file(dir), ec);
     return dir + "/" + name + "_" + ts;
 }
 

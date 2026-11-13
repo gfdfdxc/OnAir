@@ -30,6 +30,12 @@ inline std::filesystem::path u8file(const std::string& p) {
     return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(v.data()), v.size()));
 }
 
+// A native filesystem path back to UTF-8, without the Windows ANSI code page.
+inline std::string pathUtf8(const std::filesystem::path& p) {
+    const auto s = p.u8string();
+    return std::string(s.begin(), s.end());
+}
+
 // fopen() for a UTF-8 path; mode is plain ASCII ("wb", "rb")
 inline FILE* u8fopen(const std::string& p, const char* mode) {
 #ifdef _WIN32

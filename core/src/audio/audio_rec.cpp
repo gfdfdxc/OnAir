@@ -1,5 +1,6 @@
 #include "dect2/common/thread_name.h"
 #include "dect2/audio/audio_rec.h"
+#include "dect2/common/u8file.h"
 #include "dect2/audio/flac_enc.h"
 #include "dect2/audio/mp3_enc.h"
 #include <algorithm>
@@ -79,7 +80,7 @@ struct AudioRecorder::Impl {
         if (!st) for (size_t i = 0; i + 1 < pend.size(); i += 2) if (std::fabs(pend[i] - pend[i + 1]) > 1e-3f) { st = true; break; }
         ch = st ? 2 : 1;
         const std::string p = nthPath(++fileN);
-        f = fopen(p.c_str(), "wb");
+        f = u8fopen(p, "wb");
         if (!f) { fail("cannot write " + p); return; }
         std::vector<std::string> tags;
         if (!o.tag.empty()) tags.push_back("COMMENT=" + o.tag);
@@ -232,9 +233,9 @@ bool AudioRecorder::start(const std::string& path, const AudioRecOptions& o, std
     Impl& s = *p_;
     if (o.format == AudioRecFormat::Mp3 && !Mp3Enc::available()) { err = "MP3 needs the LAME library (libmp3lame), which is not installed"; return false; }
     std::error_code ec;
-    const auto parent = std::filesystem::path(path).parent_path();
+    const auto parent = u8file(path).parent_path();
     if (!parent.empty()) std::filesystem::create_directories(parent, ec);
-    if (ec) { err = "cannot create " + parent.string() + ": " + ec.message(); return false; }
+    if (ec) { err = "cannot create " + pathUtf8(parent) + ": " + ec.message(); return false; }
     s.o = o; s.basePath = path;
     if (s.ring.empty()) s.ring.assign(kRingFrames * 2, 0.f);
     s.w = 0; s.r = 0; s.owner = nullptr; s.lastMs = 0; s.ringRate = 0; s.wantRate = 0; s.dropped = 0;

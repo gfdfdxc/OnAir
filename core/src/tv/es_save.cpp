@@ -1,11 +1,12 @@
 #include "dect2/tv/es_save.h"
+#include "dect2/common/u8file.h"
 
 namespace dect2 {
 
 bool EsSink::open(const std::string& path) {
     std::lock_guard<std::mutex> lk(mu_);
     if (f_) { fclose(f_); f_ = nullptr; }
-    f_ = fopen(path.c_str(), "wb");
+    f_ = u8fopen(path, "wb");
     n_ = 0; path_ = f_ ? path : std::string();
     return f_ != nullptr;
 }

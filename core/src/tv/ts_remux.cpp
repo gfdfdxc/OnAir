@@ -1,6 +1,7 @@
 // Several single-programme transport streams into one multiplex (see ts_remux.h, issue #492).
 #include "dect2/tv/ts_remux.h"
 #include "dect2/tv/ts_proto.h"
+#include "dect2/common/u8file.h"
 #include <algorithm>
 
 namespace dect2 {
@@ -52,10 +53,25 @@ void bumpIfChanged(const std::vector<uint8_t>& s, size_t verAt, std::vector<uint
     last = std::move(k);
 }
 
+std::string utf8Prefix(const std::string& text, size_t limit) {
+    std::string s = u8valid(text);
+    if (s.size() > limit) {
+        while (limit > 0 && ((unsigned char)s[limit] & 0xC0) == 0x80) limit--;
+        s.resize(limit);
+    }
+    return s;
+}
+
 std::string dvbName(const std::string& utf8) {   // a UTF-8 name gets the DVB prefix 0x15 when it is not plain ASCII
-    std::string s = utf8.substr(0, kNameMax);
+    const std::string s = utf8Prefix(utf8, kNameMax);
     for (unsigned char c : s) if (c >= 0x80) return std::string(1, '\x15') + s;
     return s;
+}
+
+std::string wireName(const std::string& encoded) {
+    // Preserve the input's encoding selector. UTF-8 text may only be shortened between complete characters.
+    if (!encoded.empty() && encoded[0] == '\x15') return std::string(1, '\x15') + utf8Prefix(encoded.substr(1), kNameMax - 1);
+    return encoded.substr(0, kNameMax);
 }
 
 } // namespace
@@ -234,8 +250,8 @@ void TsRemux::queueTables() {
         for (size_t k = 0; k < in_.size(); k++) {
             const In& x = in_[k];
             if (!x.active || !x.pmtSeen) continue;
-            const std::string name = !x.src.name.empty() ? dvbName(x.src.name) : !x.sdtName.empty() ? x.sdtName.substr(0, kNameMax) : "Generator " + std::to_string(k + 1);
-            const std::string prov = !x.src.provider.empty() ? dvbName(x.src.provider) : x.sdtProvider.substr(0, kNameMax);
+            const std::string name = !x.src.name.empty() ? dvbName(x.src.name) : !x.sdtName.empty() ? wireName(x.sdtName) : "Generator " + std::to_string(k + 1);
+            const std::string prov = !x.src.provider.empty() ? dvbName(x.src.provider) : wireName(x.sdtProvider);
             const int sid = (cfg_.firstServiceId + (int)k) & 0xFFFF;
             const size_t dlen = 2 + 3 + prov.size() + name.size();
             s.push_back((uint8_t)(sid >> 8)); s.push_back((uint8_t)sid);

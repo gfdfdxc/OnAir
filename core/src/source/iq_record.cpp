@@ -150,7 +150,7 @@ void IqRecorder::writeSigmf(bool final) {
     i.dataFile = path_.substr(s == std::string::npos ? 0 : s + 1);
     if (final) { std::lock_guard<std::mutex> lk(mu_); i.sampleCount = samples_; }
     FILE* f = nullptr;
-    try { f = fopen(dect2::u8file(sigmfPath_).string().c_str(), "wb"); } catch (...) {}
+    try { f = dect2::u8fopen(sigmfPath_, "wb"); } catch (...) {}
     if (!f) return;
     const std::string j = sigmfAddExtra(sigmfMetaJson(i), sigmfHw_, sigmfGeo_, geoLat_, geoLon_);
     fwrite(j.data(), 1, j.size(), f);
@@ -198,12 +198,15 @@ bool IqRecorder::start(const std::string& path, FileFormat fmt, double rateHz, s
     if (sigmf_) {
         try {
             const std::filesystem::path p = dect2::u8file(path);
-            std::filesystem::path base = p; base.replace_extension("");
-            sigmfPath_ = base.string() + ".sigmf-meta";
+            std::filesystem::path meta = p; meta.replace_extension(".sigmf-meta");
+            sigmfPath_ = dect2::pathUtf8(meta);
             sigmfWhen_ = sigmfUtcNow();
             std::error_code ec;   // the same data under the name IQEngine looks for: a hard link, no second copy
-            std::filesystem::remove(base.string() + ".sigmf-data", ec);
-            std::filesystem::create_hard_link(p, base.string() + ".sigmf-data", ec);
+            std::filesystem::path data = p; data.replace_extension(".sigmf-data");
+            if (!std::filesystem::equivalent(p, data, ec)) {
+                std::filesystem::remove(data, ec);
+                std::filesystem::create_hard_link(p, data, ec);
+            }
         } catch (...) { sigmfPath_.clear(); }
         writeSigmf(false);
     }

@@ -1,6 +1,7 @@
 // DAB / DAB+ audio: superframe assembly (Reed-Solomon, firecode, access units) and decoding with FFmpeg.
 #include "dect2/codec/codec_paths.h"
 #include "dect2/dab/dab.h"
+#include "dect2/common/u8file.h"
 #include "dect2/common/endian.h"
 #include "dect2/audio/audioout.h"
 #include "dect2/dab/dab_pad.h"
@@ -683,11 +684,11 @@ bool DabAudio::startRecording(const std::string& base, DabRecFormat fmt, bool dl
     const char* ext = fmt == DabRecFormat::Wav ? ".wav" : I.dabPlus ? ".m4a" : ".mp2";
     I.rec.path = base + ext;
     if (fmt == DabRecFormat::Wav || !I.dabPlus) {
-        I.rec.f = std::fopen(I.rec.path.c_str(), "wb");
+        I.rec.f = u8fopen(I.rec.path, "wb");
         if (!I.rec.f) return fail("cannot create the file");
         if (fmt == DabRecFormat::Wav) I.wavHeader(0);
     }
-    if (dlLog) I.rec.log = std::fopen((base + ".txt").c_str(), "wb");
+    if (dlLog) I.rec.log = u8fopen(base + ".txt", "wb");
     I.rec.active = true;
     return true;
 }

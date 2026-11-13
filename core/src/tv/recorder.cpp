@@ -310,7 +310,7 @@ std::vector<RecordingEntry> listRecordings(const std::string& dir) {
     if (!fs::is_directory(u8file(dir), ec)) return r;
     std::set<std::string> withSidecar;
     for (auto& de : fs::directory_iterator(u8file(dir), ec)) {
-        const std::string name = de.path().filename().string();
+        const std::string name = pathUtf8(de.path().filename());
         if (name.size() > 8 && name.compare(name.size() - 8, 8, ".ts.json") == 0) {
             RecordingEntry e;
             const std::string full = dir + "/" + name;
@@ -324,7 +324,7 @@ std::vector<RecordingEntry> listRecordings(const std::string& dir) {
         }
     }
     for (auto& de : fs::directory_iterator(u8file(dir), ec)) {
-        const std::string name = de.path().filename().string();
+        const std::string name = pathUtf8(de.path().filename());
         if (name.size() <= 3 || name.compare(name.size() - 3, 3, ".ts") != 0) continue;
         const std::string full = dir + "/" + name;
         if (withSidecar.count(full)) continue;
